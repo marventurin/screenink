@@ -1,0 +1,8 @@
+{
+  "uuid": "screenink@omv",
+  "name": "ScreenInk",
+  "description": "Draw a temporary transparent ink layer over the GNOME Shell desktop.",
+  "shell-version": ["45", "46", "47", "48", "49","50"],
+  "url": "https://example.local/screenink",
+  "version": 1
+}

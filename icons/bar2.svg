@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" version="1.1">
+  <g fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round">
+    <!-- screen/tablet -->
+    <rect x="1.7" y="3.1" width="9.5" height="9.1" rx="1.35" ry="1.35"/>
+    <path d="M6.25 11.1h1.45"/>
+    <!-- freehand stroke -->
+    <path d="M4.2 8.25c.7-.95 1.25.7 1.9-.05.5-.6.95.7 1.7.2"/>
+    <!-- stylus body outline -->
+    <path d="M9.65 8.15 13.2 4.6"/>
+  </g>
+
+  <!-- stylus body -->
+  <g fill="currentColor" stroke="none">
+    <path d="M9.55 7.55 12.95 4.15c.18-.18.47-.18.65 0l.67.67c.18.18.18.47 0 .65l-3.4 3.4c-.07.07-.15.11-.24.13l-1.22.29c-.22.05-.42-.15-.37-.37l.29-1.22c.02-.09.06-.17.13-.24z"/>
+    <!-- nib -->
+    <path d="M8.95 9.25 9.68 8.52 10.17 9.01 9.44 9.74c-.14.14-.38.14-.52 0l-.02-.02c-.14-.14-.14-.38 0-.52z"/>
+    <path d="M8.55 9.76 9.1 8.86 9.45 9.21z"/>
+    <!-- cap end -->
+    <path d="M13.75 3.48 14.85 2.38a.62.62 0 0 1 .88 0l.09.09a.62.62 0 0 1 0 .88l-1.1 1.1z" transform="translate(-1.52 1.52)"/>
+  </g>
+</svg>
