@@ -36,6 +36,51 @@ const Tool = Object.freeze({
     ARROW: 'arrow',
 });
 
+const STRINGS = {
+    es: {
+        activate: 'Activar',
+        deactivate: 'Desactivar',
+        freehand: 'Trazo libre',
+        rectangle: 'Rectángulo',
+        ellipse: 'Elipse',
+        arrow: 'Flecha',
+        green: 'Verde',
+        red: 'Rojo',
+        yellow: 'Amarillo',
+        white: 'Blanco',
+        increaseWidth: 'Aumentar grosor',
+        decreaseWidth: 'Reducir grosor',
+        strokeWidth: 'Grosor',
+        undo: 'Deshacer',
+        clear: 'Limpiar',
+        language: 'Idioma',
+        spanish: 'Español',
+        english: 'English',
+        back: 'Volver',
+    },
+    en: {
+        activate: 'Activate',
+        deactivate: 'Deactivate',
+        freehand: 'Freehand',
+        rectangle: 'Rectangle',
+        ellipse: 'Ellipse',
+        arrow: 'Arrow',
+        green: 'Green',
+        red: 'Red',
+        yellow: 'Yellow',
+        white: 'White',
+        increaseWidth: 'Increase width',
+        decreaseWidth: 'Decrease width',
+        strokeWidth: 'Width',
+        undo: 'Undo',
+        clear: 'Clear',
+        language: 'Language',
+        spanish: 'Español',
+        english: 'English',
+        back: 'Back',
+    },
+};
+
 const InkLayer = GObject.registerClass(
 class InkLayer extends St.DrawingArea {
     _init() {
@@ -358,8 +403,10 @@ export default class ScreenInkExtension extends Extension {
             global.stage.connect('notify::height', () => this._inkLayer.resizeToStage()),
         ]);
         this._drawingEnabled = false;
+        this._settingsButtonPressed = false;
         this._menuCloseTimeoutId = 0;
         this._menuReopenIdleId = 0;
+        this._language = 'es';
         this._activeInkColor = INK_COLORS.green;
         this._activeTool = Tool.FREE;
         this._activeStrokeWidth = STROKE_WIDTH_INITIAL;
@@ -367,6 +414,7 @@ export default class ScreenInkExtension extends Extension {
         this._toolItems = new Map();
         this._strokeWidthItems = new Map();
         this._strokeWidthPreviews = new Set();
+        this._languageItems = new Map();
         this._inkLayer.setColorChangedCallback(color => {
             this._activeInkColor = color;
             this._syncColorItems();
@@ -413,14 +461,21 @@ export default class ScreenInkExtension extends Extension {
         this._drawingIconBox = null;
         this._menuCloseTimeoutId = 0;
         this._menuReopenIdleId = 0;
+        this._settingsButtonPressed = false;
         this._colorItems = null;
         this._toolItems = null;
         this._strokeWidthItems = null;
         this._strokeWidthPreviews = null;
+        this._languageItems = null;
         this._drawingEnabled = false;
+        this._language = 'es';
         this._activeInkColor = INK_COLORS.green;
         this._activeTool = Tool.FREE;
         this._activeStrokeWidth = STROKE_WIDTH_INITIAL;
+    }
+
+    _t(key) {
+        return STRINGS[this._language][key] || key;
     }
 
     _iconPath(fileName) {
@@ -681,51 +736,81 @@ export default class ScreenInkExtension extends Extension {
         this._addDrawingActionItem();
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        this._addToolItem('Trazo libre', Tool.FREE);
-        this._addToolItem('Rectángulo', Tool.RECT);
-        this._addToolItem('Elipse', Tool.ELLIPSE);
-        this._addToolItem('Flecha', Tool.ARROW);
+        this._addToolItem('freehand', Tool.FREE);
+        this._addToolItem('rectangle', Tool.RECT);
+        this._addToolItem('ellipse', Tool.ELLIPSE);
+        this._addToolItem('arrow', Tool.ARROW);
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._addColorItem('Verde', INK_COLORS.green);
-        this._addColorItem('Rojo', INK_COLORS.red);
-        this._addColorItem('Amarillo', INK_COLORS.yellow);
-        this._addColorItem('Blanco', INK_COLORS.white);
+        this._addColorItem('green', INK_COLORS.green, 'color-green.svg');
+        this._addColorItem('red', INK_COLORS.red, 'color-red.svg');
+        this._addColorItem('yellow', INK_COLORS.yellow, 'color-yellow.svg');
+        this._addColorItem('white', INK_COLORS.white, 'color-white.svg');
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         for (const width of STROKE_WIDTH_PRESETS)
             this._addStrokeWidthItem(width);
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._addActionItem('Deshacer', () => this._inkLayer.undo());
-        this._addActionItem('Limpiar', () => this._inkLayer.clear());
+        this._addActionItem(this._t('undo'), () => this._inkLayer.undo(), 'undo.svg');
+        this._addActionItem(this._t('clear'), () => this._inkLayer.clear(), 'clear.svg');
     }
 
     _addDrawingActionItem() {
         this._drawingItem = new PopupMenu.PopupBaseMenuItem();
         const {row, label, iconBox} = this._createMenuRow(
-            'Activar',
+            this._t('activate'),
             this._createIcon('activate.svg', MENU_ICON_SIZE)
         );
+        const settingsButton = new St.Button({
+            label: '⋮',
+            can_focus: true,
+            reactive: true,
+            width: 32,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'padding: 0; margin: 0;',
+        });
+        const itemRow = new St.BoxLayout({
+            vertical: false,
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
 
         this._drawingLabel = label;
         this._drawingIconBox = iconBox;
-        this._drawingItem.add_child(row);
-        this._drawingItem.connect('activate', () => this._withMenuKeptOpen(
-            () => this._toggleDrawing()
-        ));
+        row.x_expand = true;
+        itemRow.add_child(row);
+        itemRow.add_child(settingsButton);
+        this._drawingItem.add_child(itemRow);
+        this._drawingItem.connect('activate', () => {
+            if (this._settingsButtonPressed) {
+                this._settingsButtonPressed = false;
+                return;
+            }
+
+            this._withMenuKeptOpen(() => this._toggleDrawing());
+        });
+        settingsButton.connect('button-press-event', () => {
+            this._settingsButtonPressed = true;
+            return Clutter.EVENT_PROPAGATE;
+        });
+        settingsButton.connect('clicked', () => {
+            this._settingsButtonPressed = true;
+            this._showLanguageMenu();
+        });
         this._syncDrawingItem();
 
         this._indicator.menu.addMenuItem(this._drawingItem);
     }
 
-    _addColorItem(label, color) {
-        const item = this._addActionItem(label, () => this._setInkColor(color), this._colorIconFor(label));
+    _addColorItem(labelKey, color, iconFileName) {
+        const item = this._addActionItem(this._t(labelKey), () => this._setInkColor(color), iconFileName);
         this._colorItems.set(color, item);
         this._syncColorItems();
     }
 
-    _addToolItem(label, tool) {
-        const item = this._addActionItem(label, () => this._setTool(tool), this._toolIconFor(tool));
+    _addToolItem(labelKey, tool) {
+        const item = this._addActionItem(this._t(labelKey), () => this._setTool(tool), this._toolIconFor(tool));
         this._toolItems.set(tool, item);
         this._syncToolItems();
     }
@@ -734,7 +819,7 @@ export default class ScreenInkExtension extends Extension {
         const item = new PopupMenu.PopupBaseMenuItem();
         const preview = this._createStrokeWidthPreview(width);
         const {row} = this._createMenuRow(
-            `Grosor ${width} px`,
+            `${this._t('strokeWidth')} ${width} px`,
             preview
         );
 
@@ -747,6 +832,50 @@ export default class ScreenInkExtension extends Extension {
         this._strokeWidthItems.set(width, item);
         this._strokeWidthPreviews.add(preview);
         this._syncStrokeWidthItems();
+    }
+
+    _showLanguageMenu() {
+        if (!this._indicator)
+            return;
+
+        this._drawingItem = null;
+        this._drawingLabel = null;
+        this._drawingIconBox = null;
+        this._colorItems = new Map();
+        this._toolItems = new Map();
+        this._strokeWidthItems = new Map();
+        this._strokeWidthPreviews = new Set();
+        this._languageItems = new Map();
+        this._indicator.menu.removeAll();
+
+        const languageItem = new PopupMenu.PopupBaseMenuItem({
+            reactive: false,
+            can_focus: false,
+        });
+
+        languageItem.add_child(new St.Label({
+            text: this._t('language'),
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        this._indicator.menu.addMenuItem(languageItem);
+        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._addLanguageItem('es', this._t('spanish'));
+        this._addLanguageItem('en', this._t('english'));
+        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._addActionItem(this._t('back'), () => this._rebuildMenu());
+
+        this._syncLanguageItems();
+    }
+
+    _addLanguageItem(language, label) {
+        const item = new PopupMenu.PopupMenuItem(label);
+
+        item.connect('activate', () => this._withMenuKeptOpen(
+            () => this._setLanguage(language)
+        ));
+        this._indicator.menu.addMenuItem(item);
+        this._languageItems.set(language, item);
     }
 
     _addActionItem(label, callback, iconFileName = null) {
@@ -846,12 +975,50 @@ export default class ScreenInkExtension extends Extension {
         this._syncStrokeWidthItems();
     }
 
+    _setLanguage(language) {
+        if (!STRINGS[language] || this._language === language)
+            return;
+
+        this._language = language;
+        this._rebuildMenu();
+    }
+
+    _rebuildMenu() {
+        if (!this._indicator)
+            return;
+
+        this._drawingItem = null;
+        this._drawingLabel = null;
+        this._drawingIconBox = null;
+        this._settingsButtonPressed = false;
+        this._colorItems = new Map();
+        this._toolItems = new Map();
+        this._strokeWidthItems = new Map();
+        this._strokeWidthPreviews = new Set();
+        this._languageItems = new Map();
+
+        this._indicator.menu.removeAll();
+        this._buildMenu();
+    }
+
     _syncColorItems() {
         if (!this._colorItems)
             return;
 
         for (const [color, item] of this._colorItems) {
             const ornament = color === this._activeInkColor
+                ? PopupMenu.Ornament.CHECK
+                : PopupMenu.Ornament.NONE;
+            item.setOrnament(ornament);
+        }
+    }
+
+    _syncLanguageItems() {
+        if (!this._languageItems)
+            return;
+
+        for (const [language, item] of this._languageItems) {
+            const ornament = language === this._language
                 ? PopupMenu.Ornament.CHECK
                 : PopupMenu.Ornament.NONE;
             item.setOrnament(ornament);
@@ -908,7 +1075,7 @@ export default class ScreenInkExtension extends Extension {
         if (!this._drawingLabel || !this._drawingIconBox)
             return;
 
-        this._drawingLabel.text = this._drawingEnabled ? 'Desactivar' : 'Activar';
+        this._drawingLabel.text = this._drawingEnabled ? this._t('deactivate') : this._t('activate');
         this._drawingIconBox.set_child(this._createIcon(
             this._drawingEnabled ? 'deactivate.svg' : 'activate.svg',
             MENU_ICON_SIZE
