@@ -3,5 +3,14 @@
 }
 
 .screenink-panel-icon {
-  color: #ffffff;
+  min-width: 30px;
+  min-height: 30px;
+  width: 30px;
+  height: 30px;
+  color: -st-icon-color;
+}
+
+.screenink-panel-glyph {
+  width: 30px;
+  height: 30px;
 }

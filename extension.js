@@ -19,7 +19,8 @@ const INK_COLORS = {
 
 const STROKE_WIDTH_PRESETS = [3, 5, 8, 12, 18];
 const STROKE_WIDTH_INITIAL = 5;
-const PANEL_ICON_SIZE = 18;
+const PANEL_ICON_DRAW_SIZE = 18;
+const PANEL_ICON_SIZE = 30;
 const MENU_ICON_SIZE = 30;
 const MENU_ICON_COLUMN_WIDTH = 32;
 const MENU_CLOSE_DELAY_MS = 250;
@@ -339,10 +340,7 @@ class InkLayer extends St.DrawingArea {
 export default class ScreenInkExtension extends Extension {
     enable() {
         this._indicator = new PanelMenu.Button(0.5, 'ScreenInk', false);
-        this._indicator.add_child(this._createIcon('bar.svg', PANEL_ICON_SIZE, {
-            style_class: 'system-status-icon screenink-panel-icon',
-            style: `icon-size: ${PANEL_ICON_SIZE}px;`,
-        }));
+        this._indicator.add_child(this._createPanelIcon());
 
         this._inkLayer = new InkLayer();
         Main.layoutManager.addChrome(this._inkLayer, {
@@ -439,6 +437,64 @@ export default class ScreenInkExtension extends Extension {
             height: size,
             ...params,
         });
+    }
+
+    _createPanelIcon() {
+        const icon = new St.DrawingArea({
+            style_class: 'screenink-panel-glyph',
+            width: PANEL_ICON_SIZE,
+            height: PANEL_ICON_SIZE,
+        });
+        icon.set_size(PANEL_ICON_SIZE, PANEL_ICON_SIZE);
+        icon.connect('repaint', area => this._drawPanelIcon(area));
+
+        return new St.Bin({
+            style_class: 'screenink-panel-icon',
+            child: icon,
+            width: PANEL_ICON_SIZE,
+            height: PANEL_ICON_SIZE,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+    }
+
+    _drawPanelIcon(area) {
+        const cr = area.get_context();
+
+        try {
+            cr.scale(PANEL_ICON_SIZE / PANEL_ICON_DRAW_SIZE, PANEL_ICON_SIZE / PANEL_ICON_DRAW_SIZE);
+            this._setPanelIconColor(cr, area);
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            cr.setLineJoin(Cairo.LineJoin.ROUND);
+
+            cr.setLineWidth(2.1);
+            cr.moveTo(3.1, 6.1);
+            cr.curveTo(4.9, 3.1, 7.9, 3.3, 9.3, 5.8);
+            cr.curveTo(10.5, 7.9, 11.2, 8.8, 13.1, 6.8);
+            cr.stroke();
+
+            cr.moveTo(2.4, 12.2);
+            cr.curveTo(4.5, 8.0, 7.2, 8.2, 8.7, 10.9);
+            cr.curveTo(10.1, 13.3, 11.6, 13.6, 13.7, 11.0);
+            cr.stroke();
+        } finally {
+            cr.$dispose();
+        }
+    }
+
+    _setPanelIconColor(cr, actor) {
+        try {
+            const [found, color] = actor.get_theme_node().lookup_color('color', false);
+
+            if (found) {
+                cr.setSourceRGBA(color.red / 255, color.green / 255, color.blue / 255, color.alpha / 255);
+                return;
+            }
+        } catch {
+            // Fall through to a visible color if theme lookup is not available yet.
+        }
+
+        cr.setSourceRGBA(1, 1, 1, 1);
     }
 
     _createMenuRow(label, icon) {
