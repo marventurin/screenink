@@ -173,9 +173,9 @@ class InkLayer extends St.DrawingArea {
     }
 
     stopDrawing() {
+        this._currentStroke = null;
         this.reactive = false;
         this.hide();
-        this._currentStroke = null;
     }
 
     _invalidate() {
@@ -396,6 +396,10 @@ export default class ScreenInkExtension extends Extension {
         });
 
         this._signals = [];
+        this._overviewActive = false;
+        this._wasDrawingBeforeOverview = false;
+        this._wasFloatingButtonEnabledBeforeOverview = false;
+        this._wasFloatingMenuVisibleBeforeOverview = false;
         this._signals.push([
             global.stage,
             global.stage.connect('notify::width', () => {
@@ -414,9 +418,10 @@ export default class ScreenInkExtension extends Extension {
                 this._raiseFloatingUi();
             }),
         ]);
-        this._connectSignalIfAvailable(global.display, 'in-fullscreen-changed', () => {
+        this._addSignal(global.display, 'in-fullscreen-changed', () => {
             this._raiseFloatingUi();
         });
+        this._connectOverviewSignals();
         this._drawingEnabled = false;
         this._floatingButtonEnabled = false;
         this._floatingButton = null;
@@ -452,14 +457,55 @@ export default class ScreenInkExtension extends Extension {
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 
-    _connectSignalIfAvailable(object, signalName, callback) {
+    _addSignal(object, signalName, callback) {
         try {
-            if (!GObject.signal_lookup(signalName, object.constructor.$gtype))
-                return;
-
             this._signals.push([object, object.connect(signalName, callback)]);
+            return true;
         } catch (error) {
-            logError(error, `ScreenInk: failed to connect ${signalName}`);
+            console.log(`ScreenInk: could not connect ${signalName}: ${error}`);
+            return false;
+        }
+    }
+
+    _addOverviewSignal(signalName, callback) {
+        try {
+            const id = Main.overview.connect(signalName, callback);
+            this._signals.push([Main.overview, id]);
+            console.log(`ScreenInk: connected overview signal ${signalName}`);
+            return true;
+        } catch (e) {
+            console.log(`ScreenInk: could not connect overview signal ${signalName}: ${e}`);
+            return false;
+        }
+    }
+
+    _connectOverviewSignals() {
+        if (!Main.overview)
+            return;
+
+        const connectedSignals = [
+            this._addOverviewSignal('showing', () => this._onOverviewShowing()),
+            this._addOverviewSignal('hiding', () => this._onOverviewShowing()),
+            this._addOverviewSignal('hidden', () => this._onOverviewHidden()),
+        ].filter(Boolean).length;
+
+        if (connectedSignals > 0)
+            return;
+
+        if ('visible' in Main.overview) {
+            this._addOverviewSignal('notify::visible', () => {
+                if (Main.overview.visible)
+                    this._onOverviewShowing();
+                else
+                    this._onOverviewHidden();
+            });
+        } else if ('shown' in Main.overview) {
+            this._addOverviewSignal('notify::shown', () => {
+                if (Main.overview.shown)
+                    this._onOverviewShowing();
+                else
+                    this._onOverviewHidden();
+            });
         }
     }
 
@@ -478,7 +524,19 @@ export default class ScreenInkExtension extends Extension {
             this._inkLayer.setColorChangedCallback(null);
             this._inkLayer.setToolChangedCallback(null);
             this._inkLayer.setStrokeWidthChangedCallback(null);
-            Main.layoutManager.removeChrome(this._inkLayer);
+            this._inkLayer.reactive = false;
+            this._inkLayer.hide();
+
+            try {
+                Main.layoutManager.removeChrome(this._inkLayer);
+            } catch (error) {
+                logError(error, 'ScreenInk: failed to remove ink layer chrome');
+            }
+
+            const parent = this._inkLayer.get_parent();
+            if (parent)
+                parent.remove_child(this._inkLayer);
+
             this._inkLayer.destroy();
             this._inkLayer = null;
         }
@@ -503,6 +561,10 @@ export default class ScreenInkExtension extends Extension {
         this._drawingEnabled = false;
         this._floatingButtonEnabled = false;
         this._floatingMenu = null;
+        this._overviewActive = false;
+        this._wasDrawingBeforeOverview = false;
+        this._wasFloatingButtonEnabledBeforeOverview = false;
+        this._wasFloatingMenuVisibleBeforeOverview = false;
         this._language = 'es';
         this._activeInkColor = INK_COLORS.green;
         this._activeTool = Tool.FREE;
@@ -1138,6 +1200,14 @@ export default class ScreenInkExtension extends Extension {
 
         this._drawingEnabled = enabled;
 
+        if (this._overviewActive) {
+            this._inkLayer.reactive = false;
+            this._inkLayer.hide();
+            this._syncDrawingItem();
+            this._rebuildFloatingMenu();
+            return;
+        }
+
         if (enabled) {
             this._inkLayer.startDrawing();
         } else {
@@ -1149,8 +1219,58 @@ export default class ScreenInkExtension extends Extension {
         this._raiseFloatingUi();
     }
 
+    _onOverviewShowing() {
+        console.log('ScreenInk: overview showing');
+        this._overviewActive = true;
+
+        this._wasDrawingBeforeOverview = this._drawingEnabled;
+        this._wasFloatingButtonEnabledBeforeOverview = this._floatingButtonEnabled;
+        this._wasFloatingMenuVisibleBeforeOverview =
+            this._floatingMenu && this._floatingMenu.visible;
+
+        if (this._inkLayer) {
+            this._inkLayer.reactive = false;
+            this._inkLayer.hide();
+        }
+
+        if (this._floatingMenu) {
+            this._floatingMenu.reactive = false;
+            const parent = this._floatingMenu.get_parent();
+            if (parent)
+                parent.remove_child(this._floatingMenu);
+            this._floatingMenu.destroy();
+            this._floatingMenu = null;
+        }
+
+        if (this._floatingButton) {
+            this._floatingButton.reactive = false;
+            const parent = this._floatingButton.get_parent();
+            if (parent)
+                parent.remove_child(this._floatingButton);
+            this._floatingButton.destroy();
+            this._floatingButton = null;
+        }
+    }
+
+    _onOverviewHidden() {
+        console.log('ScreenInk: overview hidden');
+        this._overviewActive = false;
+
+        if (this._wasDrawingBeforeOverview && this._inkLayer)
+            this._inkLayer.startDrawing();
+        else if (this._inkLayer)
+            this._inkLayer.stopDrawing();
+
+        if (this._floatingButtonEnabled)
+            this._showFloatingButton();
+
+        this._wasDrawingBeforeOverview = false;
+        this._wasFloatingButtonEnabledBeforeOverview = false;
+        this._wasFloatingMenuVisibleBeforeOverview = false;
+    }
+
     _createFloatingButton() {
-        if (this._floatingButton)
+        if (this._overviewActive || this._floatingButton)
             return;
 
         const label = new St.Label({
@@ -1190,12 +1310,19 @@ export default class ScreenInkExtension extends Extension {
     }
 
     _showFloatingButton() {
+        if (this._overviewActive)
+            return;
+
         if (!this._floatingButton)
             this._createFloatingButton();
 
+        if (!this._floatingButton)
+            return;
+
         this._updateFloatingButtonPosition();
-        this._floatingButton.show();
         this._floatingButton.reactive = true;
+        this._floatingButton.show();
+        this._floatingButton.raise_top();
         this._raiseFloatingUi();
 
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
@@ -1217,12 +1344,12 @@ export default class ScreenInkExtension extends Extension {
         if (!this._floatingButton)
             return;
 
-        this._floatingButton.destroy();
+        this._destroyActor(this._floatingButton);
         this._floatingButton = null;
     }
 
     _createFloatingMenu() {
-        if (this._floatingMenu)
+        if (this._overviewActive || this._floatingMenu)
             return;
 
         this._floatingMenu = new St.BoxLayout({
@@ -1238,12 +1365,19 @@ export default class ScreenInkExtension extends Extension {
     }
 
     _showFloatingMenu() {
+        if (this._overviewActive)
+            return;
+
         if (!this._floatingMenu)
             this._createFloatingMenu();
 
+        if (!this._floatingMenu)
+            return;
+
         this._updateFloatingMenuPosition();
-        this._floatingMenu.show();
         this._floatingMenu.reactive = true;
+        this._floatingMenu.show();
+        this._floatingMenu.raise_top();
         this._raiseFloatingUi();
     }
 
@@ -1268,8 +1402,25 @@ export default class ScreenInkExtension extends Extension {
         if (!this._floatingMenu)
             return;
 
-        this._floatingMenu.destroy();
+        this._destroyActor(this._floatingMenu);
         this._floatingMenu = null;
+    }
+
+    _isActorInScene(actor) {
+        return !!actor?.get_parent();
+    }
+
+    _destroyActor(actor) {
+        if (!actor)
+            return;
+
+        actor.reactive = false;
+        actor.hide();
+
+        if (this._isActorInScene(actor))
+            actor.get_parent().remove_child(actor);
+
+        actor.destroy();
     }
 
     _rebuildFloatingMenu() {
