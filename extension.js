@@ -54,6 +54,7 @@ const STRINGS = {
         undo: 'Deshacer',
         clear: 'Limpiar',
         language: 'Idioma',
+        floatingButton: 'Botón flotante',
         spanish: 'Español',
         english: 'English',
         back: 'Volver',
@@ -75,6 +76,7 @@ const STRINGS = {
         undo: 'Undo',
         clear: 'Clear',
         language: 'Language',
+        floatingButton: 'Floating button',
         spanish: 'Español',
         english: 'English',
         back: 'Back',
@@ -396,13 +398,29 @@ export default class ScreenInkExtension extends Extension {
         this._signals = [];
         this._signals.push([
             global.stage,
-            global.stage.connect('notify::width', () => this._inkLayer.resizeToStage()),
+            global.stage.connect('notify::width', () => {
+                this._inkLayer.resizeToStage();
+                this._updateFloatingButtonPosition();
+                this._updateFloatingMenuPosition();
+                this._raiseFloatingUi();
+            }),
         ]);
         this._signals.push([
             global.stage,
-            global.stage.connect('notify::height', () => this._inkLayer.resizeToStage()),
+            global.stage.connect('notify::height', () => {
+                this._inkLayer.resizeToStage();
+                this._updateFloatingButtonPosition();
+                this._updateFloatingMenuPosition();
+                this._raiseFloatingUi();
+            }),
         ]);
+        this._connectSignalIfAvailable(global.display, 'in-fullscreen-changed', () => {
+            this._raiseFloatingUi();
+        });
         this._drawingEnabled = false;
+        this._floatingButtonEnabled = false;
+        this._floatingButton = null;
+        this._floatingMenu = null;
         this._settingsButtonPressed = false;
         this._menuCloseTimeoutId = 0;
         this._menuReopenIdleId = 0;
@@ -415,6 +433,7 @@ export default class ScreenInkExtension extends Extension {
         this._strokeWidthItems = new Map();
         this._strokeWidthPreviews = new Set();
         this._languageItems = new Map();
+        this._floatingButtonItem = null;
         this._inkLayer.setColorChangedCallback(color => {
             this._activeInkColor = color;
             this._syncColorItems();
@@ -433,8 +452,21 @@ export default class ScreenInkExtension extends Extension {
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 
+    _connectSignalIfAvailable(object, signalName, callback) {
+        try {
+            if (!GObject.signal_lookup(signalName, object.constructor.$gtype))
+                return;
+
+            this._signals.push([object, object.connect(signalName, callback)]);
+        } catch (error) {
+            logError(error, `ScreenInk: failed to connect ${signalName}`);
+        }
+    }
+
     disable() {
         this._clearMenuTimers();
+        this._destroyFloatingMenu();
+        this._destroyFloatingButton();
 
         if (this._signals) {
             for (const [object, id] of this._signals)
@@ -467,7 +499,10 @@ export default class ScreenInkExtension extends Extension {
         this._strokeWidthItems = null;
         this._strokeWidthPreviews = null;
         this._languageItems = null;
+        this._floatingButtonItem = null;
         this._drawingEnabled = false;
+        this._floatingButtonEnabled = false;
+        this._floatingMenu = null;
         this._language = 'es';
         this._activeInkColor = INK_COLORS.green;
         this._activeTool = Tool.FREE;
@@ -846,6 +881,7 @@ export default class ScreenInkExtension extends Extension {
         this._strokeWidthItems = new Map();
         this._strokeWidthPreviews = new Set();
         this._languageItems = new Map();
+        this._floatingButtonItem = null;
         this._indicator.menu.removeAll();
 
         const languageItem = new PopupMenu.PopupBaseMenuItem({
@@ -863,9 +899,12 @@ export default class ScreenInkExtension extends Extension {
         this._addLanguageItem('es', this._t('spanish'));
         this._addLanguageItem('en', this._t('english'));
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._addFloatingButtonItem();
+        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addActionItem(this._t('back'), () => this._rebuildMenu());
 
         this._syncLanguageItems();
+        this._syncFloatingButtonItem();
     }
 
     _addLanguageItem(language, label) {
@@ -876,6 +915,17 @@ export default class ScreenInkExtension extends Extension {
         ));
         this._indicator.menu.addMenuItem(item);
         this._languageItems.set(language, item);
+    }
+
+    _addFloatingButtonItem() {
+        const item = new PopupMenu.PopupMenuItem(this._t('floatingButton'));
+
+        item.connect('activate', () => this._withMenuKeptOpen(
+            () => this._toggleFloatingButtonEnabled()
+        ));
+        this._indicator.menu.addMenuItem(item);
+        this._floatingButtonItem = item;
+        this._syncFloatingButtonItem();
     }
 
     _addActionItem(label, callback, iconFileName = null) {
@@ -960,6 +1010,7 @@ export default class ScreenInkExtension extends Extension {
         this._activeTool = tool;
         this._inkLayer.setTool(tool);
         this._syncToolItems();
+        this._rebuildFloatingMenu();
     }
 
     _setInkColor(color) {
@@ -981,6 +1032,7 @@ export default class ScreenInkExtension extends Extension {
 
         this._language = language;
         this._rebuildMenu();
+        this._rebuildFloatingMenu();
     }
 
     _rebuildMenu() {
@@ -996,6 +1048,7 @@ export default class ScreenInkExtension extends Extension {
         this._strokeWidthItems = new Map();
         this._strokeWidthPreviews = new Set();
         this._languageItems = new Map();
+        this._floatingButtonItem = null;
 
         this._indicator.menu.removeAll();
         this._buildMenu();
@@ -1023,6 +1076,16 @@ export default class ScreenInkExtension extends Extension {
                 : PopupMenu.Ornament.NONE;
             item.setOrnament(ornament);
         }
+    }
+
+    _syncFloatingButtonItem() {
+        if (!this._floatingButtonItem)
+            return;
+
+        const ornament = this._floatingButtonEnabled
+            ? PopupMenu.Ornament.CHECK
+            : PopupMenu.Ornament.NONE;
+        this._floatingButtonItem.setOrnament(ornament);
     }
 
     _syncToolItems() {
@@ -1061,14 +1124,245 @@ export default class ScreenInkExtension extends Extension {
         if (!this._inkLayer)
             return;
 
-        this._drawingEnabled = !this._drawingEnabled;
+        this._setDrawingEnabled(!this._drawingEnabled);
+    }
 
-        if (this._drawingEnabled) {
+    _setDrawingEnabled(enabled) {
+        if (!this._inkLayer)
+            return;
+
+        if (this._drawingEnabled === enabled) {
+            this._raiseFloatingUi();
+            return;
+        }
+
+        this._drawingEnabled = enabled;
+
+        if (enabled) {
             this._inkLayer.startDrawing();
         } else {
             this._inkLayer.stopDrawing();
         }
+
         this._syncDrawingItem();
+        this._rebuildFloatingMenu();
+        this._raiseFloatingUi();
+    }
+
+    _createFloatingButton() {
+        if (this._floatingButton)
+            return;
+
+        const label = new St.Label({
+            text: '✏️',
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 24px;',
+        });
+
+        this._floatingButton = new St.Button({
+            style_class: 'screenink-floating-button',
+            reactive: true,
+            can_focus: true,
+            track_hover: true,
+            visible: true,
+            child: label,
+        });
+        this._floatingButton.set_size(52, 52);
+        this._updateFloatingButtonPosition();
+        Main.uiGroup.add_child(this._floatingButton);
+
+        this._floatingButton.connect('button-press-event', (actor, event) => {
+            const button = event.get_button();
+
+            if (button === Clutter.BUTTON_PRIMARY) {
+                this._toggleFloatingMenu();
+                return Clutter.EVENT_STOP;
+            }
+
+            if (button === Clutter.BUTTON_SECONDARY) {
+                this._inkLayer.clear();
+                return Clutter.EVENT_STOP;
+            }
+
+            return Clutter.EVENT_PROPAGATE;
+        });
+    }
+
+    _showFloatingButton() {
+        if (!this._floatingButton)
+            this._createFloatingButton();
+
+        this._updateFloatingButtonPosition();
+        this._floatingButton.show();
+        this._floatingButton.reactive = true;
+        this._raiseFloatingUi();
+
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+            this._raiseFloatingUi();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _hideFloatingButton() {
+        if (!this._floatingButton)
+            return;
+
+        this._hideFloatingMenu();
+        this._floatingButton.reactive = false;
+        this._floatingButton.hide();
+    }
+
+    _destroyFloatingButton() {
+        if (!this._floatingButton)
+            return;
+
+        this._floatingButton.destroy();
+        this._floatingButton = null;
+    }
+
+    _createFloatingMenu() {
+        if (this._floatingMenu)
+            return;
+
+        this._floatingMenu = new St.BoxLayout({
+            style_class: 'screenink-floating-menu',
+            vertical: true,
+            reactive: true,
+            visible: false,
+        });
+        this._floatingMenu.set_width(190);
+        this._rebuildFloatingMenu();
+        this._updateFloatingMenuPosition();
+        Main.uiGroup.add_child(this._floatingMenu);
+    }
+
+    _showFloatingMenu() {
+        if (!this._floatingMenu)
+            this._createFloatingMenu();
+
+        this._updateFloatingMenuPosition();
+        this._floatingMenu.show();
+        this._floatingMenu.reactive = true;
+        this._raiseFloatingUi();
+    }
+
+    _hideFloatingMenu() {
+        if (!this._floatingMenu)
+            return;
+
+        this._floatingMenu.reactive = false;
+        this._floatingMenu.hide();
+    }
+
+    _toggleFloatingMenu() {
+        if (this._floatingMenu?.visible) {
+            this._hideFloatingMenu();
+            return;
+        }
+
+        this._showFloatingMenu();
+    }
+
+    _destroyFloatingMenu() {
+        if (!this._floatingMenu)
+            return;
+
+        this._floatingMenu.destroy();
+        this._floatingMenu = null;
+    }
+
+    _rebuildFloatingMenu() {
+        if (!this._floatingMenu)
+            return;
+
+        for (const child of this._floatingMenu.get_children())
+            child.destroy();
+
+        this._addFloatingMenuItem(
+            this._drawingEnabled ? this._t('deactivate') : this._t('activate'),
+            () => this._toggleDrawing()
+        );
+        this._addFloatingMenuItem(this._floatingToolLabel('freehand'), () => this._setTool(Tool.FREE));
+        this._addFloatingMenuItem(this._t('rectangle'), () => this._setTool(Tool.RECT));
+        this._addFloatingMenuItem(this._t('ellipse'), () => this._setTool(Tool.ELLIPSE));
+        this._addFloatingMenuItem(this._t('arrow'), () => this._setTool(Tool.ARROW));
+        this._addFloatingMenuItem(this._t('undo'), () => this._inkLayer.undo());
+        this._addFloatingMenuItem(this._t('clear'), () => this._inkLayer.clear());
+    }
+
+    _addFloatingMenuItem(label, callback) {
+        const textLabel = new St.Label({
+            text: label,
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+
+        textLabel.clutter_text.set_line_wrap(false);
+
+        const item = new St.Button({
+            style_class: 'screenink-floating-menu-item',
+            reactive: true,
+            can_focus: true,
+            track_hover: true,
+            x_expand: true,
+            child: textLabel,
+        });
+        item.set_height(36);
+        item.connect('clicked', () => {
+            callback();
+            this._raiseFloatingUi();
+        });
+        this._floatingMenu.add_child(item);
+    }
+
+    _floatingToolLabel(labelKey) {
+        if (labelKey === 'freehand' && this._language === 'es')
+            return 'Libre';
+
+        return this._t(labelKey);
+    }
+
+    _updateFloatingButtonPosition() {
+        if (!this._floatingButton)
+            return;
+
+        this._floatingButton.set_size(52, 52);
+        this._floatingButton.set_position(global.stage.width - 72, 72);
+    }
+
+    _updateFloatingMenuPosition() {
+        if (!this._floatingMenu)
+            return;
+
+        const x = Math.max(12, global.stage.width - 230);
+        const y = Math.min(130, Math.max(12, global.stage.height - 270));
+
+        this._floatingMenu.set_width(190);
+        this._floatingMenu.set_position(x, y);
+    }
+
+    _raiseFloatingButton() {
+        if (this._floatingButton)
+            this._floatingButton.raise_top();
+    }
+
+    _raiseFloatingUi() {
+        if (this._floatingMenu)
+            this._floatingMenu.raise_top();
+
+        this._raiseFloatingButton();
+    }
+
+    _toggleFloatingButtonEnabled() {
+        this._floatingButtonEnabled = !this._floatingButtonEnabled;
+
+        if (this._floatingButtonEnabled)
+            this._showFloatingButton();
+        else
+            this._hideFloatingButton();
+
+        this._syncFloatingButtonItem();
     }
 
     _syncDrawingItem() {
